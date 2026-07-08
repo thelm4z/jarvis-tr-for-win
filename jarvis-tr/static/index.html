@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JARVIS-TR</title>
+<style>
+  :root{
+    --zemin:#0c111d; --panel:#131a2a; --cizgi:#1f2a40;
+    --metin:#e8edf6; --soluk:#8a96ad;
+    --buz:#7fd4ff; --buz-koyu:#2b9fd9; --kehribar:#ffb454;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:var(--zemin); color:var(--metin); min-height:100vh;
+    font-family:"Segoe UI",system-ui,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+  }
+  header{padding:28px 0 8px; text-align:center}
+  header h1{font-size:15px; font-weight:600; letter-spacing:.45em; color:var(--soluk)}
+  header h1 b{color:var(--buz); font-weight:600}
+
+  /* ---- küre: dinlerken nefes alır, konuşurken dalgalanır ---- */
+  #kure-alan{position:relative; width:200px; height:200px; margin:28px 0 10px;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    -webkit-tap-highlight-color:transparent}
+  #kure{
+    width:120px; height:120px; border-radius:50%;
+    background:radial-gradient(circle at 35% 35%, var(--buz) 0%, var(--buz-koyu) 45%, #103a55 100%);
+    box-shadow:0 0 40px rgba(127,212,255,.25), inset 0 0 30px rgba(255,255,255,.15);
+    transition:transform .25s ease, box-shadow .4s ease;
+  }
+  #halka{position:absolute; width:160px; height:160px; border-radius:50%;
+    border:1px solid rgba(127,212,255,.25); transition:all .4s ease}
+  .dinliyor #kure{animation:nefes 1.6s ease-in-out infinite;
+    box-shadow:0 0 70px rgba(127,212,255,.55), inset 0 0 30px rgba(255,255,255,.2)}
+  .dinliyor #halka{animation:genisle 1.6s ease-out infinite}
+  .dusunuyor #kure{animation:donus 1.1s linear infinite;
+    background:conic-gradient(from 0deg, var(--buz-koyu), var(--buz), var(--buz-koyu))}
+  .konusuyor #kure{animation:dalga .5s ease-in-out infinite alternate}
+  @keyframes nefes{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+  @keyframes genisle{0%{transform:scale(.8);opacity:.8}100%{transform:scale(1.35);opacity:0}}
+  @keyframes donus{to{transform:rotate(360deg)}}
+  @keyframes dalga{from{transform:scale(.96)}to{transform:scale(1.1)}}
+  @media (prefers-reduced-motion: reduce){
+    #kure,#halka{animation:none !important}
+  }
+
+  #durum{font-size:13px; color:var(--soluk); letter-spacing:.08em; min-height:20px}
+  #durum.aktif{color:var(--buz)}
+
+  /* ---- konuşma dökümü ---- */
+  #dokum{width:min(620px, 92vw); flex:1; margin:24px 0 16px; display:flex;
+    flex-direction:column; gap:10px; overflow-y:auto; max-height:46vh; padding:4px}
+  .balon{padding:10px 14px; border-radius:12px; font-size:14.5px; line-height:1.55;
+    max-width:85%; border:1px solid var(--cizgi)}
+  .ben{align-self:flex-end; background:#16233c; border-color:#24385e}
+  .jarvis{align-self:flex-start; background:var(--panel)}
+  .eylem{align-self:flex-start; font-size:12px; color:var(--kehribar);
+    border:1px dashed rgba(255,180,84,.4); background:transparent; padding:6px 12px}
+  .hata{align-self:center; color:#ff8a8a; font-size:13px}
+
+  /* ---- yazılı giriş (yedek) ---- */
+  #giris{width:min(620px,92vw); display:flex; gap:8px; padding-bottom:28px}
+  #metin-kutusu{flex:1; background:var(--panel); border:1px solid var(--cizgi);
+    color:var(--metin); border-radius:10px; padding:11px 14px; font-size:14px; outline:none}
+  #metin-kutusu:focus{border-color:var(--buz-koyu)}
+  #gonder{background:var(--buz-koyu); border:none; color:#06121d; font-weight:600;
+    border-radius:10px; padding:0 18px; cursor:pointer; font-size:14px}
+  #gonder:hover{background:var(--buz)}
+  button:focus-visible, #kure-alan:focus-visible{outline:2px solid var(--buz); outline-offset:3px}
+</style>
+</head>
+<body>
+<header><h1>JARVIS<b>·</b>TR</h1></header>
+
+<div id="kure-alan" role="button" tabindex="0" aria-label="Dinlemeyi başlat veya durdur">
+  <div id="halka"></div>
+  <div id="kure"></div>
+</div>
+<div id="durum">küreye tıkla ve konuş</div>
+
+<div id="dokum" aria-live="polite"></div>
+
+<div id="giris">
+  <input id="metin-kutusu" type="text" placeholder="Ya da buraya yaz…" autocomplete="off">
+  <button id="gonder">Gönder</button>
+</div>
+
+<script>
+const kureAlan = document.getElementById("kure-alan");
+const durum = document.getElementById("durum");
+const dokum = document.getElementById("dokum");
+const kutu = document.getElementById("metin-kutusu");
+const gonderBtn = document.getElementById("gonder");
+
+let ws, dinleme = null, dinliyorMu = false, calanSes = null;
+
+// ---------- WebSocket ----------
+function baglan(){
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onclose = () => setTimeout(baglan, 1500);
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "durum" && m.value === "dusunuyor") durumAyarla("dusunuyor", "düşünüyor…");
+    if (m.type === "hata"){ balonEkle(m.text, "hata"); durumAyarla("", "küreye tıkla ve konuş"); }
+    if (m.type === "cevap"){
+      if (m.text) balonEkle(m.text, "jarvis");
+      if (m.eylem) balonEkle("⚡ " + m.eylem, "eylem");
+      if (m.audio) sesCal(m.audio);
+      else durumAyarla("", "küreye tıkla ve konuş");
+    }
+  };
+}
+baglan();
+
+// ---------- ses tanıma (tarayıcı, tr-TR) ----------
+const TanimaAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (TanimaAPI){
+  dinleme = new TanimaAPI();
+  dinleme.lang = "tr-TR";
+  dinleme.interimResults = true;
+  dinleme.continuous = false;
+
+  dinleme.onresult = (e) => {
+    const sonuc = e.results[e.results.length - 1];
+    durumAyarla("dinliyor", sonuc[0].transcript);
+    if (sonuc.isFinal) gonder(sonuc[0].transcript);
+  };
+  dinleme.onend = () => { dinliyorMu = false; kureAlan.className = ""; };
+  dinleme.onerror = () => durumAyarla("", "ses algılanamadı, tekrar dene");
+} else {
+  durum.textContent = "Tarayıcın ses tanımayı desteklemiyor — Chrome veya Edge kullan.";
+}
+
+function dinlemeyiDegistir(){
+  if (!dinleme) return;
+  if (calanSes){ calanSes.pause(); calanSes = null; }   // konuşurken kesebil
+  if (dinliyorMu){ dinleme.stop(); durumAyarla("", "küreye tıkla ve konuş"); }
+  else { dinleme.start(); dinliyorMu = true; durumAyarla("dinliyor", "dinliyorum…"); }
+}
+kureAlan.addEventListener("click", dinlemeyiDegistir);
+kureAlan.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") dinlemeyiDegistir(); });
+
+// ---------- gönderim ----------
+function gonder(metin){
+  metin = metin.trim();
+  if (!metin || !ws || ws.readyState !== 1) return;
+  balonEkle(metin, "ben");
+  ws.send(JSON.stringify({ text: metin }));
+}
+gonderBtn.addEventListener("click", () => { gonder(kutu.value); kutu.value = ""; });
+kutu.addEventListener("keydown", (e) => { if (e.key === "Enter"){ gonder(kutu.value); kutu.value = ""; } });
+
+// ---------- ses çalma ----------
+function sesCal(b64){
+  durumAyarla("konusuyor", "konuşuyor…");
+  calanSes = new Audio("data:audio/mp3;base64," + b64);
+  calanSes.onended = () => { calanSes = null; durumAyarla("", "küreye tıkla ve konuş"); };
+  calanSes.play().catch(() => durumAyarla("", "sayfaya bir kez tıkla, sonra tekrar dene"));
+}
+
+// ---------- arayüz yardımcıları ----------
+function durumAyarla(sinif, mesaj){
+  kureAlan.className = sinif;
+  durum.textContent = mesaj;
+  durum.classList.toggle("aktif", !!sinif);
+}
+function balonEkle(metin, tur){
+  const b = document.createElement("div");
+  b.className = "balon " + tur;
+  b.textContent = metin;
+  dokum.appendChild(b);
+  dokum.scrollTop = dokum.scrollHeight;
+}
+</script>
+</body>
+</html>
